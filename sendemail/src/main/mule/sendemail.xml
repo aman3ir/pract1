@@ -699,6 +699,7 @@ output application/json
 			</ee:message>
 		</ee:transform>
 		<logger level="INFO" doc:name="Logger" doc:id="3b21a078-b855-428b-8e03-aad317202024" message="Trace Id: #[vars.traceId] ||   Subscriber TD Job  || Job Last Run Time::#[payload]"/>
+		<logger level="INFO" doc:name="Logger" doc:id="7fc95e4c-832e-4357-9612-2c66e5667467" message="check"/>
 		<os:store doc:name="Store" doc:id="c8343292-781f-43fe-b364-6bfc7a913181" key="last_run_datetime" objectStore="LastRunTimeObjectStore"/>
 		<logger level="INFO" doc:name="Logger Flow Ended" doc:id="029d29fd-7e2a-4dba-84cf-5b1cf1a91050" message="Trace Id: #[vars.traceId] || Subscriber TD Job || Subscriber Td Flow Completed "/>
 		<error-handler >
