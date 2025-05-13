@@ -1,0 +1,710 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:email="http://www.mulesoft.org/schema/mule/email"
+	xmlns:os="http://www.mulesoft.org/schema/mule/os" xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:batch="http://www.mulesoft.org/schema/mule/batch"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce" xmlns:teradata="http://www.mulesoft.org/schema/mule/teradata" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/teradata http://www.mulesoft.org/schema/mule/teradata/current/mule-teradata.xsd
+http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/batch http://www.mulesoft.org/schema/mule/batch/current/mule-batch.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+	<salesforce:sfdc-config name="Salesforce_Config" doc:name="Salesforce Config" doc:id="bc84f70e-bc4e-4f6e-aee0-3094a92ffc69" >
+		<salesforce:basic-connection username="mulesoft@three.ie.3sandbox" password="testing@12345" securityToken="VZ7m6ympGgbrqc1sT5zSVeCp" url="https://test.salesforce.com/services/Soap/u/61.0" />
+	</salesforce:sfdc-config>
+	<db:config name="Database_Config" doc:name="Database Config" doc:id="e6a1db04-b9d0-4075-9a56-d2c862d6bee0" >
+		<db:generic-connection url="jdbc:teradata://172.24.221.137/DATABASE=T01_RESTRICTED_VIEWS" driverClassName="com.teradata.jdbc.TeraDriver" user="P_SALESFORCE_USER" password="verilog5"/>
+	</db:config>
+	<os:config name="ObjectStore_Config" doc:name="ObjectStore Config" doc:id="ffa78ae4-6783-4f09-ae0f-62b698b04930" >
+	</os:config>
+	<os:object-store name="LastRunTimeObjectStore" doc:name="Object store" doc:id="021985e0-5ad3-4a94-80f7-12c0f6dcb22a" maxEntries="2" entryTtlUnit="DAYS" config-ref="ObjectStore_Config" entryTtl="5"/>
+	<configuration-properties doc:name="Configuration properties" doc:id="636aca64-47b4-4937-b92c-22d0e753e1f4" file="config\config.yaml" />
+	<email:smtp-config name="Email_SMTP" doc:name="Email SMTP" doc:id="f0907230-663e-4c20-a5ea-8504c61f4ff7" >
+		<email:smtp-connection host="172.16.98.59" />
+	</email:smtp-config>
+	<flow name="subscriber_td_jobsFlow" doc:id="41a1df2f-7226-46dc-9d64-524c1bf2c083" >
+		<scheduler doc:name="Scheduler" doc:id="f136c481-5f96-4cf1-b87b-4e2e96a7d10d" >
+			<scheduling-strategy >
+				<fixed-frequency frequency="10" timeUnit="HOURS"/>
+			</scheduling-strategy>
+		</scheduler>
+		<set-variable value="#[uuid()]" doc:name="Set Variable traceid" doc:id="6f9a099b-2209-4afd-9e59-b737d14e7b3c" variableName="traceid"/>
+		<logger level="INFO" doc:name="Logger Flow Started" doc:id="97faafd9-c028-4bc7-97b3-dcfd6f8144dd" message="Trace Id: #[vars.traceId] || Subscriber TD Job ||  Flow Started"/>
+				<set-variable value="#[Mule::p('config.loaded_date')]" doc:name="Set Variable loaded_date" doc:id="64369357-dd31-4303-951a-b9c8d5a7f4bd" variableName="loaded_date"/>
+		<set-variable value='#[%dw 2.0&#10;output application/json&#10;---&#10;(now() as Date) - |P1D| as String {format: "yyyy-MM-dd"}]' doc:name="Set dayBefore" doc:id="899197e2-c49c-4ba1-b4bc-1d861b7b694c" variableName="dayBefore" />
+		<os:retrieve doc:name="Retrieve" doc:id="7ac47eab-ab26-47f5-bdae-3466f0fa1481" key="last_run_datetime" objectStore="LastRunTimeObjectStore" target="last_run_time">
+			<os:default-value><![CDATA[#[vars.daybefore]]]></os:default-value>
+		</os:retrieve>
+		<!-- [STUDIO:"Set Variable last_run_time"]<set-variable value="#[payload&#93;" doc:name="Set Variable last_run_time" doc:id="0721c6b5-b984-45d4-90e5-566948852de1" variableName="last_run_time" /> [STUDIO] -->
+		<choice doc:name="Choice" doc:id="941c77bf-453b-4311-9b9d-3b0c14b6316f" >
+			<when expression="#[Mule::p('config.defaultDate') == &quot;true&quot; and Mule::p('config.loaded_date') != null]">
+				<!-- [STUDIO:"Set Variable tdQuery"]<set-variable value="SELECT CUST.CO_CORPORATE_ID, SUBS.CU_CUSTOMER_ID, SUBS.SU_SUBSCRIBER_ID, SUBS.SU_STATUS_ID, SUBS.SU_COMMIT_START_DATE SU_COMMIT_START_DATE, SUBS.SU_COMMIT_END_DATE SU_COMMIT_END_DATE, MODEL.HA_MANUFACTURER, MODEL.HA_MODEL, (CASE WHEN SUBS.SU_STATUS_ID = 'A' THEN STATACT.SU_STATUS_ACT_RSN_DESC END) ACTIVATION_REASON, PORT.SU_EP_OTHER_OPERATOR_DESC, (CASE WHEN SUBS.SU_STATUS_ID = 'C' THEN SUBS.SU_SUB_STATUS_LAST_DATE END) DISCONNECTED_DATE, (CASE WHEN SUBS.SU_STATUS_ID = 'C' THEN STATACT.SU_STATUS_ACT_RSN_DESC END) DISCONNECTION_REASON, UPGRADE.STATUS UPGRADE_STATUS, SIM.SU_SM_SIM_SERIAL_NO, HANDSET.CURRENT_IMEI AS SU_HA_IMEI, SUBS.SU_EX_DIRECTORY_IND, SU_DEALER.CURRENT_DEALER, STATACT.SU_COMMITMENT_PERIOD, OUTER_UPGRADE_LUD.ACCEPT_DATE LAST_UPGRADE_DATE, OUTER_UPGRADE_LUD.UPGTYPE UPGRADE_TYPE, ASPU.AVERAGE_SPENT, (CASE WHEN (HIER.SE_PP_DEVICE_TYPE = 'MBB' AND HIER.SE_FIXED_MOBILE_IND = 'MOBILE') THEN 'Mobile Broadband' WHEN (HIER_Two.SE_PP_DEVICE_TYPE = 'FWA' AND HIER_Two.PRODUCT_TYPE = 'FWA Broadband') THEN 'FWA' WHEN (COALESCE(HIER.SE_PP_DEVICE_TYPE, 'STANDARD DEVICE') &lt;&gt; 'MBB' AND HIER.SE_FIXED_MOBILE_IND = 'MOBILE') THEN 'Mobile' WHEN (HIER.SE_FIXED_MOBILE_IND = 'FIXEDLINE') THEN 'Fixed' ELSE 'Mobile' END) SERVICE_TYPE, HANDSET.SPEND_LAST_MONTH, HANDSET.SPEND_2MONTHS_AGO, HANDSET.SPEND_3MONTHS_AGO, HANDSET.TOTAL_SPEND_IN_LAST_12_MTHS, VLN.START_RANGE, VLN.END_RANGE FROM T01_RESTRICTED_VIEWS.SU_SUBSCRIBER SUBS INNER JOIN T01_RESTRICTED_VIEWS.CU_CUSTOMER CUST ON SUBS.CU_CUSTOMER_ID = CUST.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.SU_SM_SIM_HISTORY SIM ON SIM.SU_SUBSCRIBER_ID = SUBS.SU_SUBSCRIBER_ID AND SIM.CU_CUSTOMER_ID = SUBS.CU_CUSTOMER_ID AND SIM.SU_SM_CURRENT_RECORD_IND = 'Y' LEFT JOIN T01_RESTRICTED_VIEWS.SN_SUBSCRIBER_SNAPSHOT_CURR HANDSET ON SUBS.SU_SUBSCRIBER_ID = HANDSET.SU_SUBSCRIBER_ID and SUBS.CU_CUSTOMER_ID = HANDSET.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.HA_LU_HANDSET MODEL ON MODEL.HA_TAC = HANDSET.CURRENT_HA_TAC LEFT JOIN T01_RESTRICTED_VIEWS.SU_LU_STATUS_ACTIVITY STATACT ON STATACT.SU_STATUS_ACT_RSN_ID= SUBS.SU_SUB_STATUS_LAST_RSN_CODE AND STATACT.SU_STATUS_ACT_ID = SUBS.SU_SUB_STATUS_LAST_ACT LEFT JOIN T01_RESTRICTED_VIEWS.SU_EP_EXTERNAL_PORTING PORT ON SUBS.SU_SUBSCRIBER_ID = PORT.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = PORT.CU_CUSTOMER_ID AND SUBS.SU_PORT_IND = PORT.SU_EP_PORT_DIRECTION_ID AND SUBS.SU_PORT_IND = 'PI' AND (CAST((CAST((CAST(PORT.SU_EP_COMPLETE_DATE AS CHAR(10)) || ' ' || CAST(PORT.SU_EP_COMPLETE_TIME AS CHAR(8))) AS CHAR(19))) AS TIMESTAMMule::p(0))) IN (SELECT MAX(CAST((CAST((CAST(INNER_PORT.SU_EP_COMPLETE_DATE AS CHAR(10)) || ' ' || CAST(INNER_PORT.SU_EP_COMPLETE_TIME AS CHAR(8))) AS CHAR(19))) AS TIMESTAMMule::p(0))) FROM T01_RESTRICTED_VIEWS.SU_EP_EXTERNAL_PORTING INNER_PORT WHERE INNER_PORT.SU_SUBSCRIBER_ID = SUBS.SU_SUBSCRIBER_ID AND INNER_PORT.CU_CUSTOMER_ID = SUBS.CU_CUSTOMER_ID AND INNER_PORT.SU_EP_PORT_DIRECTION_ID = SUBS.SU_PORT_IND) LEFT JOIN T01_RESTRICTED_VIEWS.PPS_SU_DEALER SU_DEALER ON SUBS.SU_SUBSCRIBER_ID = SU_DEALER.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = SU_DEALER.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.F_UPGRADES UPGRADE ON SUBS.SU_SUBSCRIBER_ID = UPGRADE.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = UPGRADE.CU_CUSTOMER_ID AND UPGRADE.ID = (select max(INNER_UPGRADE.id) from T01_RESTRICTED_VIEWS.F_UPGRADES INNER_UPGRADE where SUBS.SU_SUBSCRIBER_ID = INNER_UPGRADE.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = INNER_UPGRADE.CU_CUSTOMER_ID) LEFT JOIN (SELECT UPGRADE_LUD.SU_SUBSCRIBER_ID,UPGRADE_LUD.CU_CUSTOMER_ID,UPGRADE_LUD.ACCEPT_DATE ,UPGRADE_LUD.UPGTYPE FROM T01_RESTRICTED_VIEWS.F_UPGRADES UPGRADE_LUD INNER JOIN (SELECT MAX(ID) AS MAX_ID FROM T01_RESTRICTED_VIEWS.F_UPGRADES FU1 WHERE FU1.STATUS IN ('ACC', 'PAY') AND UPGTYPE&lt;&gt;'STEEL' GROUP BY SU_SUBSCRIBER_ID) INNER_UPGRADE_LUD ON INNER_UPGRADE_LUD.MAX_ID = UPGRADE_LUD.ID) OUTER_UPGRADE_LUD ON SUBS.SU_SUBSCRIBER_ID = OUTER_UPGRADE_LUD.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = OUTER_UPGRADE_LUD.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.SUB_AVERAGE_SPENT ASPU ON SUBS.SU_SUBSCRIBER_ID = ASPU.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = ASPU.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.SU_PP_PRICE_PLAN_CURRENT PRICE_PLAN ON SUBS.SU_SUBSCRIBER_ID = PRICE_PLAN.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = PRICE_PLAN.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.SE_LU_SERVICE_HIERARCHY HIER ON PRICE_PLAN.PP_PRICE_PLAN_ID = HIER.SE_SERVICE_ID LEFT JOIN T01_RESTRICTED_VIEWS.SE_LU_SERVICE_HIERARCHY HIER_Two ON HANDSET.current_price_plan = HIER_Two.SE_SERVICE_ID left JOIN T01_RESTRICTED_VIEWS.VLN_SUBSCRIBER_DETAILS VLN ON VLN.CU_CUSTOMER_ID = SUBS.CU_CUSTOMER_ID WHERE CUST.CU_ACCOUNT_TYPE_ID IN ('COR', 'SME', 'SPT','VLN') AND (((SUBS.SU_SRC_UPDATE_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY) AND SUBS.SU_SRC_UPDATE_DATE &lt;= current_date + 1) OR (SUBS.SU_SRC_CREATION_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY))) OR (ASPU.LOADED_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY)) OR ((SIM.SU_SM_SRC_UPDATE_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY) AND SIM.SU_SM_SRC_UPDATE_DATE &lt;= current_date + 1) OR (SIM.SU_SM_SRC_CREATION_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY))) OR ((STATACT.SRC_UPDATE_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY) AND STATACT.SRC_UPDATE_DATE &lt;= current_date + 1) OR (STATACT.SRC_CREATION_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY))) OR ((PRICE_PLAN.SU_PP_SRC_UPDATE_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY) AND PRICE_PLAN.SU_PP_SRC_UPDATE_DATE &lt;= current_date + 1) OR (PRICE_PLAN.SU_PP_SRC_CREATION_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY))))" doc:name="Set Variable tdQuery" doc:id="8645fa54-1b05-4f4f-938e-041b2bd55ef1" variableName="tdQuery" /> [STUDIO] -->
+				<set-variable doc:name="Set Variable finalquery" doc:id="c1eb95a9-58b3-4e48-9f49-a1456a04d84b" variableName="finalquery" value="#[%dw 2.0&#10;&#10;output application/json&#10;&#10;var tdQuery = Mule::p('config.teradataQuery')&#10;&#10;---&#10;&#10;tdQuery replace ':rundate' with vars.loaded_date as String]"/>
+				<logger level="INFO" doc:name="Logger" doc:id="024c4f87-1a04-4bba-b4ad-e34e28791e3e" message="Trace Id: #[vars.traceId] ||  Subscriber TD Job ||  Last run time :-  #[vars.loaded_date]  and query is : #[vars.finalquery]" />
+			</when>
+			<otherwise>
+				<!-- [STUDIO:"Set Variable tdQuery"]<set-variable value="SELECT CUST.CO_CORPORATE_ID, SUBS.CU_CUSTOMER_ID, SUBS.SU_SUBSCRIBER_ID, SUBS.SU_STATUS_ID, SUBS.SU_COMMIT_START_DATE SU_COMMIT_START_DATE, SUBS.SU_COMMIT_END_DATE SU_COMMIT_END_DATE, MODEL.HA_MANUFACTURER, MODEL.HA_MODEL, (CASE WHEN SUBS.SU_STATUS_ID = 'A' THEN STATACT.SU_STATUS_ACT_RSN_DESC END) ACTIVATION_REASON, PORT.SU_EP_OTHER_OPERATOR_DESC, (CASE WHEN SUBS.SU_STATUS_ID = 'C' THEN SUBS.SU_SUB_STATUS_LAST_DATE END) DISCONNECTED_DATE, (CASE WHEN SUBS.SU_STATUS_ID = 'C' THEN STATACT.SU_STATUS_ACT_RSN_DESC END) DISCONNECTION_REASON, UPGRADE.STATUS UPGRADE_STATUS, SIM.SU_SM_SIM_SERIAL_NO, HANDSET.CURRENT_IMEI AS SU_HA_IMEI, SUBS.SU_EX_DIRECTORY_IND, SU_DEALER.CURRENT_DEALER, STATACT.SU_COMMITMENT_PERIOD, OUTER_UPGRADE_LUD.ACCEPT_DATE LAST_UPGRADE_DATE, OUTER_UPGRADE_LUD.UPGTYPE UPGRADE_TYPE, ASPU.AVERAGE_SPENT, (CASE WHEN (HIER.SE_PP_DEVICE_TYPE = 'MBB' AND HIER.SE_FIXED_MOBILE_IND = 'MOBILE') THEN 'Mobile Broadband' WHEN (HIER_Two.SE_PP_DEVICE_TYPE = 'FWA' AND HIER_Two.PRODUCT_TYPE = 'FWA Broadband') THEN 'FWA' WHEN (COALESCE(HIER.SE_PP_DEVICE_TYPE, 'STANDARD DEVICE') &lt;&gt; 'MBB' AND HIER.SE_FIXED_MOBILE_IND = 'MOBILE') THEN 'Mobile' WHEN (HIER.SE_FIXED_MOBILE_IND = 'FIXEDLINE') THEN 'Fixed' ELSE 'Mobile' END) SERVICE_TYPE, HANDSET.SPEND_LAST_MONTH, HANDSET.SPEND_2MONTHS_AGO, HANDSET.SPEND_3MONTHS_AGO, HANDSET.TOTAL_SPEND_IN_LAST_12_MTHS, VLN.START_RANGE, VLN.END_RANGE FROM T01_RESTRICTED_VIEWS.SU_SUBSCRIBER SUBS INNER JOIN T01_RESTRICTED_VIEWS.CU_CUSTOMER CUST ON SUBS.CU_CUSTOMER_ID = CUST.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.SU_SM_SIM_HISTORY SIM ON SIM.SU_SUBSCRIBER_ID = SUBS.SU_SUBSCRIBER_ID AND SIM.CU_CUSTOMER_ID = SUBS.CU_CUSTOMER_ID AND SIM.SU_SM_CURRENT_RECORD_IND = 'Y' LEFT JOIN T01_RESTRICTED_VIEWS.SN_SUBSCRIBER_SNAPSHOT_CURR HANDSET ON SUBS.SU_SUBSCRIBER_ID = HANDSET.SU_SUBSCRIBER_ID and SUBS.CU_CUSTOMER_ID = HANDSET.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.HA_LU_HANDSET MODEL ON MODEL.HA_TAC = HANDSET.CURRENT_HA_TAC LEFT JOIN T01_RESTRICTED_VIEWS.SU_LU_STATUS_ACTIVITY STATACT ON STATACT.SU_STATUS_ACT_RSN_ID= SUBS.SU_SUB_STATUS_LAST_RSN_CODE AND STATACT.SU_STATUS_ACT_ID = SUBS.SU_SUB_STATUS_LAST_ACT LEFT JOIN T01_RESTRICTED_VIEWS.SU_EP_EXTERNAL_PORTING PORT ON SUBS.SU_SUBSCRIBER_ID = PORT.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = PORT.CU_CUSTOMER_ID AND SUBS.SU_PORT_IND = PORT.SU_EP_PORT_DIRECTION_ID AND SUBS.SU_PORT_IND = 'PI' AND (CAST((CAST((CAST(PORT.SU_EP_COMPLETE_DATE AS CHAR(10)) || ' ' || CAST(PORT.SU_EP_COMPLETE_TIME AS CHAR(8))) AS CHAR(19))) AS TIMESTAMMule::p(0))) IN (SELECT MAX(CAST((CAST((CAST(INNER_PORT.SU_EP_COMPLETE_DATE AS CHAR(10)) || ' ' || CAST(INNER_PORT.SU_EP_COMPLETE_TIME AS CHAR(8))) AS CHAR(19))) AS TIMESTAMMule::p(0))) FROM T01_RESTRICTED_VIEWS.SU_EP_EXTERNAL_PORTING INNER_PORT WHERE INNER_PORT.SU_SUBSCRIBER_ID = SUBS.SU_SUBSCRIBER_ID AND INNER_PORT.CU_CUSTOMER_ID = SUBS.CU_CUSTOMER_ID AND INNER_PORT.SU_EP_PORT_DIRECTION_ID = SUBS.SU_PORT_IND) LEFT JOIN T01_RESTRICTED_VIEWS.PPS_SU_DEALER SU_DEALER ON SUBS.SU_SUBSCRIBER_ID = SU_DEALER.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = SU_DEALER.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.F_UPGRADES UPGRADE ON SUBS.SU_SUBSCRIBER_ID = UPGRADE.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = UPGRADE.CU_CUSTOMER_ID AND UPGRADE.ID = (select max(INNER_UPGRADE.id) from T01_RESTRICTED_VIEWS.F_UPGRADES INNER_UPGRADE where SUBS.SU_SUBSCRIBER_ID = INNER_UPGRADE.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = INNER_UPGRADE.CU_CUSTOMER_ID) LEFT JOIN (SELECT UPGRADE_LUD.SU_SUBSCRIBER_ID,UPGRADE_LUD.CU_CUSTOMER_ID,UPGRADE_LUD.ACCEPT_DATE ,UPGRADE_LUD.UPGTYPE FROM T01_RESTRICTED_VIEWS.F_UPGRADES UPGRADE_LUD INNER JOIN (SELECT MAX(ID) AS MAX_ID FROM T01_RESTRICTED_VIEWS.F_UPGRADES FU1 WHERE FU1.STATUS IN ('ACC', 'PAY') AND UPGTYPE&lt;&gt;'STEEL' GROUP BY SU_SUBSCRIBER_ID) INNER_UPGRADE_LUD ON INNER_UPGRADE_LUD.MAX_ID = UPGRADE_LUD.ID) OUTER_UPGRADE_LUD ON SUBS.SU_SUBSCRIBER_ID = OUTER_UPGRADE_LUD.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = OUTER_UPGRADE_LUD.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.SUB_AVERAGE_SPENT ASPU ON SUBS.SU_SUBSCRIBER_ID = ASPU.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = ASPU.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.SU_PP_PRICE_PLAN_CURRENT PRICE_PLAN ON SUBS.SU_SUBSCRIBER_ID = PRICE_PLAN.SU_SUBSCRIBER_ID AND SUBS.CU_CUSTOMER_ID = PRICE_PLAN.CU_CUSTOMER_ID LEFT JOIN T01_RESTRICTED_VIEWS.SE_LU_SERVICE_HIERARCHY HIER ON PRICE_PLAN.PP_PRICE_PLAN_ID = HIER.SE_SERVICE_ID LEFT JOIN T01_RESTRICTED_VIEWS.SE_LU_SERVICE_HIERARCHY HIER_Two ON HANDSET.current_price_plan = HIER_Two.SE_SERVICE_ID left JOIN T01_RESTRICTED_VIEWS.VLN_SUBSCRIBER_DETAILS VLN ON VLN.CU_CUSTOMER_ID = SUBS.CU_CUSTOMER_ID WHERE CUST.CU_ACCOUNT_TYPE_ID IN ('COR', 'SME', 'SPT','VLN') AND (((SUBS.SU_SRC_UPDATE_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY) AND SUBS.SU_SRC_UPDATE_DATE &lt;= current_date + 1) OR (SUBS.SU_SRC_CREATION_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY))) OR (ASPU.LOADED_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY)) OR ((SIM.SU_SM_SRC_UPDATE_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY) AND SIM.SU_SM_SRC_UPDATE_DATE &lt;= current_date + 1) OR (SIM.SU_SM_SRC_CREATION_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY))) OR ((STATACT.SRC_UPDATE_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY) AND STATACT.SRC_UPDATE_DATE &lt;= current_date + 1) OR (STATACT.SRC_CREATION_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY))) OR ((PRICE_PLAN.SU_PP_SRC_UPDATE_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY) AND PRICE_PLAN.SU_PP_SRC_UPDATE_DATE &lt;= current_date + 1) OR (PRICE_PLAN.SU_PP_SRC_CREATION_DATE &gt;= (CAST(':rundate' AS DATE)- INTERVAL '1' DAY))))" doc:name="Set Variable tdQuery" doc:id="a76b4864-1960-423e-af32-0c80a3c3d78b" variableName="tdQuery"/> [STUDIO] -->
+				<set-variable value="#[%dw 2.0&#10;output application/json&#10;&#10;var tdQuery = p('config.teradataQuery')&#10;---&#10;vars.tdQuery replace ':rundate' with vars.last_run_time as String]" doc:name="Set Variable finalquery" doc:id="58d7a87e-ac83-453d-ba8b-5ea56af74e48" variableName="finalquery"/>
+				<logger level="INFO" doc:name="Logger" doc:id="36c9e5bd-63cc-45c4-9853-193e8785df01" message="Trace Id: #[vars.traceId] ||   Subscriber TD Job ||  Last run time :-  #[vars.loaded_date]  and query is : #[vars.finalquery]"/>
+			</otherwise>
+		</choice>
+		<!-- [STUDIO:"Try"]<try doc:name="Try" doc:id="f18c0f06-0525-4a0f-94d5-f0ca5c5ac665" >
+			<db:select doc:name="Query from ADH" doc:id="f54b2c32-e8e8-4e1e-accf-00e44f03b2ce" config-ref="Database_Config" target="dataFromTD">
+				<reconnect frequency="5000" count="3" />
+				<db:sql><![CDATA[#[vars.finalquery&#93;&#93;&#93;></db:sql>
+			</db:select>
+			<error-handler >
+				<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="7fb78d12-2639-4651-b61e-4ce07d17f6a0" type="ANY">
+					<logger level="ERROR" doc:name="Logger" doc:id="4b99b24e-c4a5-43fe-9d8f-71ac74cf3454" message="Trace Id: #[vars.traceId&#93; ||   Subscriber TD Job || Error WHILE FETCHING RECORD FROM TeraData Object: Error Description: #[error.description&#93;, Error Type: #[error.errorType&#93;, Error Message: #[error.errorMessage&#93;"/>
+				</on-error-propagate>
+			</error-handler>
+		</try> [STUDIO] -->
+		<ee:transform doc:name="Transform Message" doc:id="8d5e60d0-f924-45a6-b351-a76d3cf76403" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="dataFromTD" ><![CDATA[%dw 2.0
+output application/json
+
+                var csvData = readUrl("classpath://subscriber.csv", "application/csv")
+
+                ---
+
+                csvData]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger" doc:id="50d8cfeb-5d0c-4ba9-b4e7-475074a95da1" message="Trace Id: #[vars.traceId] || Subscriber TD Job || size of dataFromTD  before filter #[sizeOf(vars.dataFromTD)]" />
+		<ee:transform doc:name="Teradata Filter" doc:id="c4bb0b20-b44a-4560-9a92-a54226e90d43">
+			<ee:message>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="dataFromTD" ><![CDATA[%dw 2.0
+output application/json
+
+---
+vars.dataFromTD
+  filter ((item) -> item.CU_CUSTOMER_ID != null and item.SU_SUBSCRIBER_ID != null)
+  distinctBy ((item) -> 
+    (item.SU_SUBSCRIBER_ID default "") ++ (item.CU_CUSTOMER_ID default "")
+  )]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger" doc:id="0517e3a2-035b-4653-a071-470ed3ee8d63" message="Trace Id: #[vars.traceId] || Subscriber TD Job || size of dataFromTD After Filter #[sizeOf(vars.dataFromTD)]" />
+		<try doc:name="Try" doc:id="6b4c203a-36ad-489b-a741-ea6a64cad445" >
+			<salesforce:query doc:name="Query RecordType" doc:id="978dc92c-8390-4e1b-aaf7-6c893d76c470" config-ref="Salesforce_Config" target="dataFromRecordType">
+				<reconnect frequency="5000" count="3" />
+				<salesforce:salesforce-query><![CDATA[#[Mule::p('config.queryFromRecordtype')]]]></salesforce:salesforce-query>
+			</salesforce:query>
+			<error-handler >
+				<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="e78ce1c5-5149-4970-9671-68302beb29a0" type="ANY">
+					<logger level="ERROR" doc:name="Logger" doc:id="852956ec-338f-4cd3-b738-a6381047701a" message="Trace Id: #[vars.traceId] ||   Subscriber TD Job || Error WHILE FETCHING RECORD FROM RecordType SFDC Object: Error Description: #[error.description], Error Type: #[error.errorType], Error Message: #[error.errorMessage]"/>
+				</on-error-propagate>
+			</error-handler>
+		</try>
+		<logger level="INFO" doc:name="Logger RecordType" doc:id="7341d61d-70c4-47a0-b8ff-538d0c0c552a" message="Trace Id: #[vars.traceId] || Subscriber TD Job || size of dataFromRecordType is #[sizeOf(vars.dataFromRecordType)]"/>
+		<try doc:name="Try" doc:id="ad32be6a-f4b9-4848-927d-1a128102c36e" >
+			<salesforce:query doc:name="Query Ban__c" doc:id="06562b4c-7d16-4892-92c3-b28b5fbb1fd9" config-ref="Salesforce_Config" target="dataFromBanc">
+				<reconnect frequency="5000" count="3" />
+				<salesforce:salesforce-query><![CDATA[#[Mule::p('config.queryFromBanc')]]]></salesforce:salesforce-query>
+			</salesforce:query>
+			<error-handler >
+				<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="951079ab-9b85-4f0c-8daa-eaf3fdfa029b" type="ANY">
+					<logger level="ERROR" doc:name="Logger" doc:id="ec756efa-8ab7-44c4-a1a0-368eb38afb43" message="Trace Id: #[vars.traceId] ||   Subscriber TD Job || Error WHILE FETCHING RECORD FROM Ban__c SFDC Object: Error Description: #[error.description], Error Type: #[error.errorType], Error Message: #[error.errorMessage]"/>
+				</on-error-propagate>
+			</error-handler>
+		</try>
+		<logger level="INFO" doc:name="Logger dataFromBanc" doc:id="a52587f8-0cac-4d40-9c2a-62dfd5057e5b" message="Trace Id: #[vars.traceId] || Subscriber TD Job || size of dataFromBanc is #[sizeOf(vars.dataFromBanc)]"/>
+		<try doc:name="Try" doc:id="a11e44bf-15ac-4589-a911-b8ca2cbb19ad" >
+			<salesforce:query doc:name="Query Account" doc:id="be7ce512-95f0-4e05-b4a2-a3dbb1631942" config-ref="Salesforce_Config" target="dataFromAccount">
+				<reconnect frequency="5000" count="3" />
+				<salesforce:salesforce-query><![CDATA[#[Mule::p('config.queryFromAccount')]]]></salesforce:salesforce-query>
+			</salesforce:query>
+			<error-handler >
+				<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="ac8d2f90-cda4-4d70-9db7-0ab7c48fc3a6" type="ANY">
+					<logger level="ERROR" doc:name="Logger" doc:id="d88bd4a5-486b-4ad4-a6cf-35cdff1045d1" message="Trace Id: #[vars.traceId] Error WHILE FETCHING RECORD FROM Account SFDC Object: Error Description: #[error.description], Error Type: #[error.errorType], Error Message: #[error.errorMessage]"/>
+				</on-error-propagate>
+			</error-handler>
+		</try>
+		<logger level="INFO" doc:name="Logger dataFromAccount" doc:id="d0adc73e-bac0-443e-a8f0-f3cb6ec22e9e" message="Trace Id: #[vars.traceId] || Subscriber TD Job || size of dataFromAccount is #[sizeOf(vars.dataFromAccount)]"/>
+		<ee:transform doc:name="dataset_1 join inner join" doc:id="1be697f3-62f7-47fd-ac19-b72cc6701258" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="dataset_1" ><![CDATA[%dw 2.0
+output application/json
+
+var recordTypeMap = vars.dataFromRecordType groupBy $.Name
+var banMap = vars.dataFromBanc groupBy $.BAN__c
+var accountMap = vars.dataFromAccount groupBy $.Account_Number__c
+
+
+// Perform the join with constant-time lookups
+var dataset_1 = vars.dataFromTD map ((td) -> do {
+  // Lookup Ban record based on CU_CUSTOMER_ID
+  var matchingBan = if(td.CU_CUSTOMER_ID != null and td.CU_CUSTOMER_ID != '') banMap[ trim(td.CU_CUSTOMER_ID as String)] else null
+
+  // Lookup RecordType record based on SERVICE_TYPE
+  var matchingRecordType = if(td.SERVICE_TYPE != null and td.SERVICE_TYPE != '') recordTypeMap[ trim(td.SERVICE_TYPE as String)] else null
+
+  // Lookup Account record based on CO_CORPORATE_ID or CU_CUSTOMER_ID
+  var matchingAccount = if (td.CO_CORPORATE_ID == null or td.CO_CORPORATE_ID == "" or trim(td.CO_CORPORATE_ID) == "-1")
+                         if(td.CU_CUSTOMER_ID != null and td.CU_CUSTOMER_ID != '') accountMap[trim(td.CU_CUSTOMER_ID as String )] else null
+                        else
+                         if (td.CO_CORPORATE_ID != null and td.CO_CORPORATE_ID != '') accountMap[trim(td.CO_CORPORATE_ID as String )] else null
+
+  // Return the merged data if all conditions are met
+  ---
+  if (matchingBan != null and matchingRecordType != null and matchingAccount != null)
+    td ++ { 
+      BAN__cId: matchingBan[0].Id,
+      RecordTypeId:matchingRecordType[0].Id,
+      AccountId:matchingAccount[0].Id
+    }
+  else 
+    null
+}) filter (record) -> record != null
+
+---
+dataset_1]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger dataset_1" doc:id="eb38a65e-79fd-40e9-8346-b28623616bc3" message="Trace Id: #[vars.traceId] || Subscriber TD Job || size of dataset_1 is #[sizeOf(vars.dataset_1)]"/>
+		<remove-variable doc:name="Remove Variable dataFromTD" doc:id="e5d6fdfe-1a84-4df9-bbbc-27676b77fff1" variableName="dataFromTD" />
+		<remove-variable doc:name="Remove Variable dataFromBanc" doc:id="adf4e6fb-380a-42af-9652-3a42f127b3eb" variableName="dataFromBanc" />
+		<remove-variable doc:name="Remove Variable dataFromRecordType" doc:id="6a0ed5b0-d7b3-447c-bb76-44205c89c678" variableName="dataFromRecordType" />
+		<remove-variable doc:name="Remove Variable dataFromAccount" doc:id="e711d3ca-cbaf-47f8-a2e1-2af8a4605434" variableName="dataFromAccount" />
+		<try doc:name="Try" doc:id="aba86bd6-8295-4a7c-9c64-fb7b6acbd543">
+			<salesforce:query doc:name="Query Subscriber__c" doc:id="380c8c4d-430d-4afe-9a33-0ca780e403b4" config-ref="Salesforce_Config" target="dataFromSubscriber__c">
+				<reconnect frequency="5000" count="3" />
+				<salesforce:salesforce-query><![CDATA[#[Mule::p('config.queryFromSubscriber')]]]></salesforce:salesforce-query>
+			</salesforce:query>
+			<error-handler>
+				<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="6c282d62-cae1-4b66-b114-5df5e82da0c5" type="ANY">
+					<logger level="ERROR" doc:name="Logger" doc:id="b371e6d1-9837-4bd7-bc10-65434331c780" message="Trace Id: #[vars.traceId] ||   Subscriber TD Job || Error WHILE FETCHING RECORD FROM Ban__c SFDC Object: Error Description: #[error.description], Error Type: #[error.errorType], Error Message: #[error.errorMessage]" />
+				</on-error-propagate>
+			</error-handler>
+		</try>
+		<logger level="INFO" doc:name="Logger Subscriber__c" doc:id="adf2bb3b-b68c-4edb-a130-a81c8f5e9751" message="Trace Id: #[vars.traceId] || Subscriber TD Job || size of dataFromSubscriber__c is #[sizeOf(vars.dataFromSubscriber__c)]" />
+		<ee:transform doc:name="Staging transform left Join" doc:id="8e8f3a57-7d42-4fd2-b830-88b2dd6f2f2b" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="stagintransform" ><![CDATA[%dw 2.0
+output application/json
+
+
+// Sample Data for Subscriber (SFDC lookup table)
+var subscriberMap =  vars.dataFromSubscriber__c groupBy $.BAN__c
+
+var stagingDataset = vars.dataset_1 map ((record) -> do {
+  var banKey = trim(record.BAN__cId)
+  var subId = trim(record.SU_SUBSCRIBER_ID)
+  var matchingSubs = subscriberMap[banKey] default []
+
+  // Find subscriber by Name match within the BAN group
+  var matchedSub = matchingSubs filter (s) -> s.Name == subId
+
+  ---
+  record ++ {
+    SubscriberId: if (matchedSub  != null) matchedSub[0].Id else null
+  }
+}) filter (item) -> item != null
+
+// Output
+---
+stagingDataset
+]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger  size of staging dataset " doc:id="b5d7d478-b34f-4103-801d-aa302ec85ca5" message="Trace Id: #[vars.traceId] || Subscriber TD Job || size of staging dataset is #[sizeOf(vars.stagintransform)] "/>
+		<remove-variable doc:name="Remove Variable dataset_1" doc:id="e6bf4216-12af-4964-a0c4-69123b4ae4dc" variableName="dataset_1" />
+		<remove-variable doc:name="Remove Variable dataFromSubscriber__c" doc:id="3b8b096f-3d46-48ca-8870-05a2b0f112bb" variableName="dataFromSubscriber__c" />
+		<ee:transform doc:name="insertorupdate" doc:id="cdbeb578-160d-4ce4-a030-d7e8fb8aa479" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="dataForUpdate" ><![CDATA[%dw 2.0
+output application/json
+
+//var stagingData = vars.stagintransform // assuming the incoming payload is named 'payload'
+---
+update: vars.stagintransform filter (item) -> (item.SubscriberId != null and item.SubscriberId != "")
+
+]]></ee:set-variable>
+				<ee:set-variable variableName="dataForInsert" ><![CDATA[%dw 2.0
+output application/json
+
+//var stagingData = vars.stagintransform // assuming the incoming payload is named 'payload'
+---
+insert: vars.stagintransform filter (item) -> (item.SubscriberId == null or item.SubscriberId == "")
+]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger size of inset and update" doc:id="488422ee-4005-471b-a9e2-d0833ecd9d46" message="Trace Id: #[vars.traceId] || Subscriber TD Job || size of dataForInsert is #[sizeOf(vars.dataForInsert.insert)]  and  size of dataForUpdate is #[sizeOf(vars.dataForUpdate.update)]" />
+		<ee:transform doc:name="Transform for update" doc:id="02d9db0c-d275-48a3-8f39-cb27fb239310">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+
+---
+vars.dataForUpdate.update 
+  filter ((item) -> 
+    not ( 
+      (item.SubscriberId == null or (item.SubscriberId as String default "") == "") or
+      (item.BAN__cId == null or (item.BAN__cId as String default "") == "") or
+      (item.AccountId == null or (item.AccountId as String default "") == "") or 
+      (item.SU_SUBSCRIBER_ID == null or (item.SU_SUBSCRIBER_ID as String default "") == "") or
+      (item.SU_EX_DIRECTORY_IND == null or (item.SU_EX_DIRECTORY_IND as String default "") == "")
+    )
+  ) 
+  map (item) -> {  
+    "Id" : item.SubscriberId as String,
+    "RecordTypeId" : item.RecordTypeId as String default "",
+    //"BAN__c" : item.BAN__cId as String,
+    //"Account__c" : item.AccountId as String,
+    "Name" : item.SU_SUBSCRIBER_ID as String,
+    "Status__c" : item.SU_STATUS_ID as String default "",
+
+    // ✅ Dates
+    "Contract_Start_Date__c" : item.SU_COMMIT_START_DATE as Date {format: "yyyy-MM-dd"} default null,
+    "Contract_Expiration_Date__c" : item.SU_COMMIT_END_DATE as Date {format: "yyyy-MM-dd"} default null,
+    "Disconnection_Date__c" : item.DISCONNECTED_DATE as Date {format: "yyyy-MM-dd"} default null,
+    "Date_of_Last_Upgrade__c" : item.LAST_UPGRADE_DATE as Date {format: "yyyy-MM-dd"} default null,
+
+    "Last_Handset_Make__c" : item.HA_MANUFACTURER as String default "",
+    "Last_Handset_Model__c" : item.HA_MODEL as String default "",
+    "Activation_Reason__c" : item.ACTIVATION_REASON as String default "",
+    "Donor_Network__c" : item.SU_EP_OTHER_OPERATOR_DESC as String default "",
+    "Reason_for_disconnection__c" : item.DISCONNECTION_REASON as String default "",
+    "Status_of_upgrade_enquiry__c" : item.UPGRADE_STATUS as String default "",
+    "SIM_Number__c" : item.SU_SM_SIM_SERIAL_NO as String default "",
+    "IMEI__c" : item.SU_HA_IMEI as String default "",
+
+    // Boolean
+    "Ex_Directory__c" : if (item.SU_EX_DIRECTORY_IND == "E") false else true,
+
+    "Dealer__c" : item.CURRENT_DEALER as String default "",
+    "Commitment_Period__c" : item.SU_COMMITMENT_PERIOD as String default "",
+    "Upgrade_Type__c" : item.UPGRADE_TYPE as String default "",
+
+    // ✅ Spend fields as Numbers
+    "Average_Spend__c" : 
+      if (item.AVERAGE_SPENT != null and item.AVERAGE_SPENT as String != "" and item.AVERAGE_SPENT as String != "NULL") 
+        item.AVERAGE_SPENT as Number 
+      else 
+        null,
+
+    "SPEND_LAST_MONTH__c": 
+      if (item.SPEND_LAST_MONTH != null and item.SPEND_LAST_MONTH as String != "" and item.SPEND_LAST_MONTH as String != "NULL") 
+        item.SPEND_LAST_MONTH as Number 
+      else 
+        null,
+
+    "SPEND_2MONTHS_AGO__c": 
+      if (item.SPEND_2MONTHS_AGO != null and item.SPEND_2MONTHS_AGO as String != "" and item.SPEND_2MONTHS_AGO as String != "NULL") 
+        item.SPEND_2MONTHS_AGO as Number 
+      else 
+        null,
+
+    "SPEND_3MONTHS_AGO__c": 
+      if (item.SPEND_3MONTHS_AGO != null and item.SPEND_3MONTHS_AGO as String != "" and item.SPEND_3MONTHS_AGO as String != "NULL") 
+        item.SPEND_3MONTHS_AGO as Number 
+      else 
+        null,
+
+    "TOTAL_SPEND_IN_LAST_12_MTHS__c": 
+      if (item.TOTAL_SPEND_IN_LAST_12_MTHS != null and item.TOTAL_SPEND_IN_LAST_12_MTHS as String != "" and item.TOTAL_SPEND_IN_LAST_12_MTHS as String != "NULL") 
+        item.TOTAL_SPEND_IN_LAST_12_MTHS as Number 
+      else 
+        null,
+
+    "Start_Range__c": item.START_RANGE as String default "",
+    "End_Range__c": item.END_RANGE as String default ""
+  }]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<!-- [STUDIO:"to csv"]<ee:transform doc:name="to csv" doc:id="e6e11f65-c07b-404a-a3a8-eaf2573f918a" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/csv quoteValues=true , lineSeparator="\n"
+
+&#45;&#45;-
+vars.dataForUpdate.update 
+  filter ((item) -> 
+    not ( 
+      (item.SubscriberId == null or (item.SubscriberId as String default "") == "") or
+      (item.BAN__cId == null or (item.BAN__cId as String default "") == "") or
+      (item.AccountId == null or (item.AccountId as String default "") == "") or 
+      (item.SU_SUBSCRIBER_ID == null or (item.SU_SUBSCRIBER_ID as String default "") == "") or
+      (item.SU_EX_DIRECTORY_IND == null or (item.SU_EX_DIRECTORY_IND as String default "") == "")
+    )
+  ) 
+  map (item) -> {  
+    "Id" : item.SubscriberId as String,
+    "RecordTypeId" : item.RecordTypeId as String default "",
+    //"BAN__c" : item.BAN__cId as String,
+    //"Account__c" : item.AccountId as String,
+    "Name" : item.SU_SUBSCRIBER_ID as String,
+    "Status__c" : item.SU_STATUS_ID as String default "",
+
+    // ✅ Dates
+    "Contract_Start_Date__c" : item.SU_COMMIT_START_DATE as Date {format: "yyyy-MM-dd"} default null,
+    "Contract_Expiration_Date__c" : item.SU_COMMIT_END_DATE as Date {format: "yyyy-MM-dd"} default null,
+    "Disconnection_Date__c" : item.DISCONNECTED_DATE as Date {format: "yyyy-MM-dd"} default null,
+    "Date_of_Last_Upgrade__c" : item.LAST_UPGRADE_DATE as Date {format: "yyyy-MM-dd"} default null,
+
+    "Last_Handset_Make__c" : item.HA_MANUFACTURER as String default "",
+    "Last_Handset_Model__c" : item.HA_MODEL as String default "",
+    "Activation_Reason__c" : item.ACTIVATION_REASON as String default "",
+    "Donor_Network__c" : item.SU_EP_OTHER_OPERATOR_DESC as String default "",
+    "Reason_for_disconnection__c" : item.DISCONNECTION_REASON as String default "",
+    "Status_of_upgrade_enquiry__c" : item.UPGRADE_STATUS as String default "",
+    "SIM_Number__c" : item.SU_SM_SIM_SERIAL_NO as String default "",
+    "IMEI__c" : item.SU_HA_IMEI as String default "",
+
+    // Boolean
+    "Ex_Directory__c" : if (item.SU_EX_DIRECTORY_IND == "E") false else true,
+
+    "Dealer__c" : item.CURRENT_DEALER as String default "",
+    "Commitment_Period__c" : item.SU_COMMITMENT_PERIOD as String default "",
+    "Upgrade_Type__c" : item.UPGRADE_TYPE as String default "",
+
+    // ✅ Spend fields as Numbers
+    "Average_Spend__c" : 
+      if (item.AVERAGE_SPENT != null and item.AVERAGE_SPENT as String != "" and item.AVERAGE_SPENT as String != "NULL") 
+        item.AVERAGE_SPENT as Number 
+      else 
+        null,
+
+    "SPEND_LAST_MONTH__c": 
+      if (item.SPEND_LAST_MONTH != null and item.SPEND_LAST_MONTH as String != "" and item.SPEND_LAST_MONTH as String != "NULL") 
+        item.SPEND_LAST_MONTH as Number 
+      else 
+        null,
+
+    "SPEND_2MONTHS_AGO__c": 
+      if (item.SPEND_2MONTHS_AGO != null and item.SPEND_2MONTHS_AGO as String != "" and item.SPEND_2MONTHS_AGO as String != "NULL") 
+        item.SPEND_2MONTHS_AGO as Number 
+      else 
+        null,
+
+    "SPEND_3MONTHS_AGO__c": 
+      if (item.SPEND_3MONTHS_AGO != null and item.SPEND_3MONTHS_AGO as String != "" and item.SPEND_3MONTHS_AGO as String != "NULL") 
+        item.SPEND_3MONTHS_AGO as Number 
+      else 
+        null,
+
+    "TOTAL_SPEND_IN_LAST_12_MTHS__c": 
+      if (item.TOTAL_SPEND_IN_LAST_12_MTHS != null and item.TOTAL_SPEND_IN_LAST_12_MTHS as String != "" and item.TOTAL_SPEND_IN_LAST_12_MTHS as String != "NULL") 
+        item.TOTAL_SPEND_IN_LAST_12_MTHS as Number 
+      else 
+        null,
+
+    "Start_Range__c": item.START_RANGE as String default "",
+    "End_Range__c": item.END_RANGE as String default ""
+  }&#93;&#93;></ee:set-payload>
+			</ee:message>
+		</ee:transform> [STUDIO] -->
+		
+		<!-- [STUDIO:"Send"]<email:send doc:name="Send" doc:id="9613dd27-a07d-4871-9766-28cd1e133a2d" config-ref="Email_SMTP" fromAddress="mulesoft.test@three.ie" subject="Subscriber  Update TD data">
+			<email:to-addresses >
+				<email:to-address value="aman.singh2@amdocs.com" />
+			</email:to-addresses>
+			<email:body contentType="text/plain" encoding="UTF-8">
+				<email:content ><![CDATA[#["Please find the attachment for subscriber update td jobs"&#93;&#93;&#93;></email:content>
+			</email:body>
+			<email:attachments ><![CDATA[#[{
+	"subscriberupdate.csv":payload
+}&#93;&#93;&#93;></email:attachments>
+		</email:send> [STUDIO] -->
+		
+		<remove-variable doc:name="Remove Variable dataForUpdate" doc:id="12e5097c-ac0a-472e-87ee-380eb391149c" variableName="dataForUpdate" />
+		<remove-variable doc:name="Remove Variable stagintransform" doc:id="52990e87-2d3a-41b5-b439-94fa738be5b0" variableName="stagintransform"/>
+		<!-- [STUDIO:"Transform Message"]<ee:transform doc:name="Transform Message" doc:id="83ddbb8e-39ea-49b1-8be2-5c00a36ce9d5" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/java
+&#45;&#45;-
+payload as Binary
+&#93;&#93;></ee:set-payload>
+			</ee:message>
+		</ee:transform> [STUDIO] -->
+		<!-- [STUDIO:"For Each"]<foreach doc:name="For Each" doc:id="a48a86b4-e9cb-4123-aaa3-8c9cd84c702e" batchSize="${config.batchSize}" collection="payload">
+			<try doc:name="Try" doc:id="309ab1d3-49ef-471b-a1fc-ee0f262231b1" >
+				<error-handler>
+					<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="a967a0f4-fa9f-4e2e-8b53-dfc5412a14c9" >
+					</on-error-continue>
+				</error-handler>
+			</try>
+			<ee:transform doc:name="failed records mapping" doc:id="2f3b4e18-c42d-4ff5-a2d0-a020dbd87227" >
+				<ee:message >
+					<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+&#45;&#45;-
+(payload.items default [&#93;)
+    filter ((item) -> item.successful == false)
+    map ((item) -> {
+        id: item.id,
+        message: item.message,
+        successful: item.successful,
+        statusCode: item.statusCode
+    })&#93;&#93;></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="INFO" doc:name="failed records" doc:id="7ec4e6ac-0cb6-4461-8e44-2f28b47569a7" message="failure record while updating: #[payload&#93;"/>
+		</foreach> [STUDIO] -->
+		<batch:job jobName="subscriber_td_jobsBatch_JobUpdate" doc:id="50bf8607-f032-489a-b270-ff3b9655fed9" maxFailedRecords="-1" blockSize="${config.batchSize}">
+			<batch:process-records>
+				<batch:step name="Batch_Step_Update" doc:id="dc1295e0-5886-4f67-8b20-771f71d5ef99">
+					<batch:aggregator doc:name="Batch Aggregator" doc:id="28c77d12-e431-4752-9d8c-16f1aab3a742" size="${config.batchSize}">
+						<logger level="DEBUG" doc:name="Logger" doc:id="150e9cba-f516-470a-a6ec-e58bbd4ba044" message="Trace Id: #[vars.traceId] || Subscriber TD Job || size of dataForUpdate is #[sizeOf(payload)] #[payload]" />
+						<try doc:name="Try" doc:id="f4c3b317-0524-4020-8916-35cbae6a4402">
+							<salesforce:update doc:name="Update" doc:id="5cb5ab1f-6cb5-44a2-b8d9-ef94f57f3946" config-ref="Salesforce_Config" type="Subscriber__c">
+								<reconnect frequency="5000" count="3" />
+			</salesforce:update>
+							<!-- [STUDIO:"Create job bulk api v 2"]<salesforce:create-job-bulk-api-v2 operation="update" doc:name="Create job bulk api v 2" doc:id="e9389c6d-82fe-4ef9-af1a-b680ea370e7b" config-ref="Salesforce_Config" objectType="Subscriber__c" /> [STUDIO] -->
+							<error-handler>
+								<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="9c937483-6de7-485c-966a-7a7bc3a91881" type="ANY">
+									<logger level="ERROR" doc:name="Logger" doc:id="e34ca4ec-c26b-4281-815b-d3dc4e8235c1" message="Trace Id: #[vars.traceId] ||   Subscriber TD Job || Error WHILE In Updating RECORD FROM Subscriber__c SFDC Object: Error Description: #[error.description], Error Type: #[error.errorType], Error Message: #[error.errorMessage]" />
+				</on-error-propagate>
+			</error-handler>
+		</try>
+					</batch:aggregator>
+				</batch:step>
+				<batch:step name="Batch_update_failure" doc:id="17ecf214-5a7c-402e-a2b3-628777fda416" acceptPolicy="ONLY_FAILURES">
+					<batch:aggregator doc:name="Batch Aggregator" doc:id="3b4d18dd-1d15-4378-a216-fcb64a0988c6" size="${config.batchSize}">
+						<logger level="INFO" doc:name="Logger" doc:id="5c2d1a59-6747-4618-8f3c-b7531ec22895" message="Trace Id: #[vars.traceId] || Subscriber TD Job || failed records while update #[sizeOf(payload)] #[payload]"/>
+					</batch:aggregator>
+				</batch:step>
+			</batch:process-records>
+			<batch:on-complete>
+				<logger level="INFO" doc:name="logger updation" doc:id="97e5fe3e-abb6-40bf-b81d-078296e319ed" message="Trace Id: #[vars.traceId] || Subscriber TD Job || Records has been updated successfully " />
+				<os:store doc:name="Store" doc:id="f65b41ca-7272-4adf-a6c1-de3334749841" key="updateJobDone" objectStore="LastRunTimeObjectStore">
+					<os:value ><![CDATA[#[true]]]></os:value>
+				</os:store>
+			</batch:on-complete>
+		</batch:job>
+		<until-successful maxRetries="9" doc:name="Until Successful" doc:id="ced1da21-3080-4cc4-9c4c-dc47995d0638" millisBetweenRetries="600000">
+			<os:retrieve doc:name="Retrieve" doc:id="26545ed9-aadf-4f29-ac04-b4481bb1229e" key="updateJobDone" target="updateJobDoneValue" objectStore="LastRunTimeObjectStore">
+				<os:default-value><![CDATA[#[false]]]></os:default-value>
+			</os:retrieve>
+			<choice doc:name="Choice" doc:id="c537abbc-4848-4fc0-8639-216fbc61a4f5">
+				<when expression="#[vars.updateJobDoneValue == true]">
+					<logger level="INFO" doc:name="Logger" doc:id="c8cc7e77-51f5-4164-af41-73a980b58248" message="updateJobDoneValue is #[vars.updateJobDoneValue]" />
+				</when>
+				<otherwise>
+					<logger level="INFO" doc:name="Logger" doc:id="9bf54eeb-4abf-4cbf-ae91-0f16bb9c50ef" message="updateJobDoneValue is #[vars.updateJobDoneValue]" />
+					<raise-error doc:name="Raise error" doc:id="c7f27f61-7121-4a37-9956-82365d58182e" type="PRECONDITIONS:UPDATE_PENDING" description="Update batch not finished"/>
+				</otherwise>
+			</choice>
+		</until-successful>
+		<ee:transform doc:name="transform for insert" doc:id="c2a723ec-f1d2-4e66-a48f-b9bb565d3b52">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+
+---
+
+vars.dataForInsert.insert 
+  filter ((item) -> 
+    not ( 
+      (item.BAN__cId == null or (item.BAN__cId as String default "") == "") or
+      (item.AccountId == null or (item.AccountId as String default "") == "") or 
+      (item.SU_SUBSCRIBER_ID == null or (item.SU_SUBSCRIBER_ID as String default "") == "") or
+      (item.SU_EX_DIRECTORY_IND == null or (item.SU_EX_DIRECTORY_IND as String default "") == "")
+    )
+  ) 
+  map (item) -> {  
+    "RecordTypeId" : item.RecordTypeId as String default "",
+    "BAN__c" : item.BAN__cId as String,
+    "Account__c" : item.AccountId as String,
+    "Name" : item.SU_SUBSCRIBER_ID as String,
+    "Status__c" : item.SU_STATUS_ID as String default "",
+    
+    "Contract_Start_Date__c" : item.SU_COMMIT_START_DATE as Date {format: "yyyy-MM-dd"} default null,
+    "Contract_Expiration_Date__c" : item.SU_COMMIT_END_DATE as Date {format: "yyyy-MM-dd"} default null,
+    "Disconnection_Date__c" : item.DISCONNECTED_DATE as Date {format: "yyyy-MM-dd"} default null,
+    "Date_of_Last_Upgrade__c" : item.LAST_UPGRADE_DATE as Date {format: "yyyy-MM-dd"} default null,
+
+    "Last_Handset_Make__c" : item.HA_MANUFACTURER as String default "",
+    "Last_Handset_Model__c" : item.HA_MODEL as String default "",
+    "Activation_Reason__c" : item.ACTIVATION_REASON as String default "",
+    "Donor_Network__c" : item.SU_EP_OTHER_OPERATOR_DESC as String default "",
+    "Reason_for_disconnection__c" : item.DISCONNECTION_REASON as String default "",
+    "Status_of_upgrade_enquiry__c" : item.UPGRADE_STATUS as String default "",
+    "SIM_Number__c" : item.SU_SM_SIM_SERIAL_NO as String default "",
+    "IMEI__c" : item.SU_HA_IMEI as String default "",
+
+    "Ex_Directory__c" : if (item.SU_EX_DIRECTORY_IND == "E") false else true,
+
+    "Dealer__c" : item.CURRENT_DEALER as String default "",
+    "Commitment_Period__c" : item.SU_COMMITMENT_PERIOD as String default "",
+    "Upgrade_Type__c" : item.UPGRADE_TYPE as String default "",
+
+    // ✅ Numbers with null fallback
+    "Average_Spend__c" : 
+      if (item.AVERAGE_SPENT != null and item.AVERAGE_SPENT as String != "" and item.AVERAGE_SPENT as String != "NULL") 
+        item.AVERAGE_SPENT as Number 
+      else 
+        null,
+
+    "SPEND_LAST_MONTH__c" : 
+      if (item.SPEND_LAST_MONTH != null and item.SPEND_LAST_MONTH as String != "" and item.SPEND_LAST_MONTH as String != "NULL") 
+        item.SPEND_LAST_MONTH as Number 
+      else 
+        null,
+
+    "SPEND_2MONTHS_AGO__c" : 
+      if (item.SPEND_2MONTHS_AGO != null and item.SPEND_2MONTHS_AGO as String != "" and item.SPEND_2MONTHS_AGO as String != "NULL") 
+        item.SPEND_2MONTHS_AGO as Number 
+      else 
+        null,
+
+    "SPEND_3MONTHS_AGO__c" : 
+      if (item.SPEND_3MONTHS_AGO != null and item.SPEND_3MONTHS_AGO as String != "" and item.SPEND_3MONTHS_AGO as String != "NULL") 
+        item.SPEND_3MONTHS_AGO as Number 
+      else 
+        null,
+
+    "TOTAL_SPEND_IN_LAST_12_MTHS__c" : 
+      if (item.TOTAL_SPEND_IN_LAST_12_MTHS != null and item.TOTAL_SPEND_IN_LAST_12_MTHS as String != "" and item.TOTAL_SPEND_IN_LAST_12_MTHS as String != "NULL") 
+        item.TOTAL_SPEND_IN_LAST_12_MTHS as Number 
+      else 
+        null,
+
+    "Start_Range__c": item.START_RANGE as String default "",
+    "End_Range__c": item.END_RANGE as String default ""
+  }]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		
+				<!-- [STUDIO:"to csv"]<ee:transform doc:name="to csv" doc:id="0227eb9a-1d9e-4040-9552-6bcc2378cea2" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/csv quoteValues=true
+
+&#45;&#45;-
+
+vars.dataForInsert.insert filter ((item) -> 
+  not ( 
+    (item.BAN__cId == null or (item.BAN__cId as String default "") == "") or
+    (item.AccountId == null or (item.AccountId as String default "") == "")  or 
+    (item.SU_SUBSCRIBER_ID == null or (item.SU_SUBSCRIBER_ID as String default "") == "") or
+    (item.SU_EX_DIRECTORY_IND == null or (item.SU_EX_DIRECTORY_IND as String default "") == "")
+  )
+) map (item) -> {  
+  "RecordTypeId" :  trim( item.RecordTypeId as String default ""),
+  "BAN__c" :  trim(item.BAN__cId as String),
+  "Account__c" : trim(item.AccountId as String),
+  "Name" : trim(item.SU_SUBSCRIBER_ID as String),
+  "Status__c" :  trim(item.SU_STATUS_ID as String default ""),
+  "Contract_Start_Date__c" :  trim(item.SU_COMMIT_START_DATE as Date {format: "yyyy-MM-dd"}  default ""),
+  "Contract_Expiration_Date__c" :  trim(item.SU_COMMIT_END_DATE as Date {format: "yyyy-MM-dd"}  default ""),
+  "Last_Handset_Make__c" : trim(item.HA_MANUFACTURER as String  default ""),
+  "Last_Handset_Model__c" : trim(item.HA_MODEL as String  default ""),
+  "Activation_Reason__c" : trim(item.ACTIVATION_REASON as String  default ""),
+  "Donor_Network__c" : trim(item.SU_EP_OTHER_OPERATOR_DESC as String  default ""),
+  "Disconnection_Date__c" :  trim(item.DISCONNECTED_DATE as Date {format: "yyyy-MM-dd"}  default ""),
+  "Reason_for_disconnection__c" : trim(item.DISCONNECTION_REASON as String  default ""),
+  "Status_of_upgrade_enquiry__c" : trim(item.UPGRADE_STATUS as String default ""),
+  "SIM_Number__c" : trim(item.SU_SM_SIM_SERIAL_NO as String  default ""),
+  "IMEI__c" : trim(item.SU_HA_IMEI as String  default ""),
+  "Ex_Directory__c" : if (item.SU_EX_DIRECTORY_IND == "E") false else true,
+  "Dealer__c" : trim(item.CURRENT_DEALER as String  default ""),
+  "Commitment_Period__c" :  trim(item.SU_COMMITMENT_PERIOD as String  default ""),
+  "Date_of_Last_Upgrade__c" : trim (item.LAST_UPGRADE_DATE as Date {format: "yyyy-MM-dd"}  default ""),
+  "Upgrade_Type__c" :  trim(item.UPGRADE_TYPE as String  default ""),
+  "Average_Spend__c" :  trim(item.AVERAGE_SPENT as String  default ""),
+  "SPEND_LAST_MONTH__c" : trim(item.SPEND_LAST_MONTH as String  default ""),
+  "SPEND_2MONTHS_AGO__c" :  trim(item.SPEND_2MONTHS_AGO as String  default ""),
+  "SPEND_3MONTHS_AGO__c" : trim(item.SPEND_3MONTHS_AGO as String  default ""),
+  "TOTAL_SPEND_IN_LAST_12_MTHS__c" : trim(item.TOTAL_SPEND_IN_LAST_12_MTHS as String  default ""),
+  "Start_Range__c": trim(item.START_RANGE as String  default ""),
+  "End_Range__c": trim(item.END_RANGE as String  default "")
+}&#93;&#93;></ee:set-payload>
+			</ee:message>
+		</ee:transform> [STUDIO] -->
+		<!-- [STUDIO:"Send"]<email:send doc:name="Send" doc:id="89fb1dae-f3b2-4a5a-b3f3-be7a8a889fda" config-ref="Email_SMTP" fromAddress="mulesoft.test@three.ie" subject="Subscriber  insert TD data">
+			<email:to-addresses >
+				<email:to-address value="aman.singh2@amdocs.com" />
+			</email:to-addresses>
+			<email:body contentType="text/plain" encoding="UTF-8">
+				<email:content ><![CDATA[#["Please find the attachment for subscriber insert td jobs"&#93;&#93;&#93;></email:content>
+			</email:body>
+			<email:attachments ><![CDATA[#[{
+	"subscriberinsert.csv":payload
+}&#93;&#93;&#93;></email:attachments>
+		</email:send> [STUDIO] -->
+		
+		<remove-variable doc:name="Remove Variable dataForInsert" doc:id="36161200-e44a-4246-9777-069c4d16c1ef" variableName="dataForInsert" />
+		<!-- [STUDIO:"For Each"]<foreach doc:name="For Each" doc:id="91222a02-4bb6-4901-92dd-5cdcf5bb7d6a" batchSize="${config.batchSize}" collection="payload">
+			<try doc:name="Try" doc:id="ba928207-a731-4e1c-acd8-e2d0c499a828" >
+				<error-handler >
+					<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="997af3ba-9ac3-4e89-b9f1-329223f1670d" >
+					</on-error-continue>
+				</error-handler>
+			</try>
+			<ee:transform doc:name="failed records mapping" doc:id="258b18a4-2703-49f2-994f-9f192f3c3c42" >
+				<ee:message >
+					<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+&#45;&#45;-
+(payload.items default [&#93;)
+    filter ((item) -> item.successful == false)
+    map ((item) -> {
+        id: item.id,
+        message: item.message,
+        successful: item.successful,
+        statusCode: item.statusCode
+    })&#93;&#93;></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="INFO" doc:name="failed records" doc:id="7ccb3f36-cccf-4c84-8a9e-6bf261912ad3" message="failure record while inserting: #[payload&#93;"/>
+		</foreach> [STUDIO] -->
+		<batch:job jobName="subscriber_td_jobsBatch_Job" doc:id="d826a589-bf7a-488a-ae69-5468f79bf1bd" maxFailedRecords="-1" blockSize="${config.batchSize}">
+			<batch:process-records>
+				<batch:step name="Batch_Step_Insert" doc:id="dadf3b94-d1b8-43f0-8e04-bf18cd0460f2">
+					<batch:aggregator doc:name="Batch Aggregator" doc:id="34a22251-354f-4408-b3fe-362a3461fc81" size="${config.batchSize}">
+						<logger level="DEBUG" doc:name="Logger" doc:id="cee3e98d-5b58-4463-bc0e-c2fbe70d2f19" message="Trace Id: #[vars.traceId] || Subscriber TD Job || size of dataForInsert is #[sizeOf(payload)] #[payload]" />
+						<try doc:name="Try" doc:id="5db2f942-ebc0-4c97-8799-54c24ac820d6">
+							<salesforce:create doc:name="Create" doc:id="843ab4f7-3743-440d-929e-8b1347113e13" config-ref="Salesforce_Config" type="Subscriber__c">
+								<reconnect frequency="5000" count="3" />
+			</salesforce:create>
+							<error-handler>
+								<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="3010f3bf-b544-4b3c-a684-38de7b98c29c" type="ANY">
+									<logger level="ERROR" doc:name="Logger" doc:id="b30251ed-5604-4054-affb-53edafd698b5" message="Trace Id: #[vars.traceId] ||   Subscriber TD Job || Error WHILE Inserting RECORD FROM Subscriber__c SFDC Object: Error Description: #[error.description], Error Type: #[error.errorType], Error Message: #[error.errorMessage]" />
+								</on-error-continue>
+			</error-handler>
+		</try>
+					</batch:aggregator>
+				</batch:step>
+				<batch:step name="Batch_Insert_failure" doc:id="bca9e756-5c8e-44a9-8416-36a20d50eeea" acceptPolicy="ONLY_FAILURES">
+					<batch:aggregator doc:name="Batch Aggregator" doc:id="cfab2115-7efe-4f06-9e17-29c47d4d677e" size="${config.batchSize}">
+						<logger level="ERROR" doc:name="Logger" doc:id="e37f07e5-3e9a-4cb7-a96e-3023c0a9b84e" message="Trace Id: #[vars.traceId] || Subscriber TD Job || failed records while insert #[sizeOf(payload)] #[payload]" />
+					</batch:aggregator>
+				</batch:step>
+			</batch:process-records>
+			<batch:on-complete>
+				<logger level="INFO" doc:name="insertion " doc:id="90f78b86-37fa-4ce6-bc27-8a751be224bb" message="Trace Id: #[vars.traceId] || Subscriber TD Job || Records has been inserted successfully " />
+			</batch:on-complete>
+		</batch:job>
+			<ee:transform doc:name="Job Last Run Time" doc:id="8a2e9aa9-ff08-4635-b76e-7bfd0d03e256" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+(now() as Date) as String {format: "yyyy-MM-dd"}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logger" doc:id="3b21a078-b855-428b-8e03-aad317202024" message="Trace Id: #[vars.traceId] ||   Subscriber TD Job  || Job Last Run Time::#[payload]"/>
+		<os:store doc:name="Store" doc:id="c8343292-781f-43fe-b364-6bfc7a913181" key="last_run_datetime" objectStore="LastRunTimeObjectStore"/>
+		<logger level="INFO" doc:name="Logger Flow Ended" doc:id="029d29fd-7e2a-4dba-84cf-5b1cf1a91050" message="Trace Id: #[vars.traceId] || Subscriber TD Job || Subscriber Td Flow Completed "/>
+		<error-handler >
+			<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="5c215eaa-5de0-4899-b983-14addd090eac" type="ANY">
+				<logger level="ERROR" doc:name="Logger" doc:id="9e0af78d-363c-461d-a34b-b410808b4499" message="Trace Id: #[vars.traceId] ||  Subscriber TD Job || #ERROR WHILE in Address TD Jobs : Error Description: #[error.description], Error Type: #[error.errorType], Error Message: #[error.errorMessage]"/>
+			</on-error-propagate>
+		</error-handler>
+	</flow>
+</mule>
